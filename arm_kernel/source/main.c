@@ -2,22 +2,7 @@
 #include "utils.h"
 #include "../../payload/arm_user_bin.h"
 
-#define FRAMEBUFFER_ADDRESS (0x14000000+0x38C0000)
-
-extern void IOS_DCFlushAll(void * addr);
-
-void clearScreen(u32 color)
-{
-	u32* framebuffer = (u32*)FRAMEBUFFER_ADDRESS;
-	int i;
-	for (i = 0; i < 896 * 504; i++)
-	{
-		framebuffer[i] = color;
-	}
-}
-
 static const char repairData_set_fault_behavior[] = {
-	// I changed the first DWORD to BX LR.
 	0xE1,0x2F,0xFF,0x1E,0xE9,0x2D,0x40,0x30,0xE5,0x93,0x20,0x00,0xE1,0xA0,0x40,0x00,
 	0xE5,0x92,0x30,0x54,0xE1,0xA0,0x50,0x01,0xE3,0x53,0x00,0x01,0x0A,0x00,0x00,0x02,
 	0xE1,0x53,0x00,0x00,0xE3,0xE0,0x00,0x00,0x18,0xBD,0x80,0x30,0xE3,0x54,0x00,0x0D,
@@ -54,26 +39,43 @@ static const char os_launch_hook[] = {
 	0x05, 0x0b, 0xcf, 0xfc, 0x05, 0x05, 0x99, 0x70, 0x05, 0x05, 0x99, 0x7e,
 };
 
-int _main()
-{
-	//void (*ios_shutdown)(int) = (void (*)(int))0xFFFFDC48;
+static const char sd_path[] = "/vol/sdcard";
 
+static unsigned int __attribute__((noinline)) disable_mmu(void)
+{
 	unsigned int control_register = 0;
 	asm volatile("MRC p15, 0, %0, c1, c0, 0" : "=r" (control_register));
-	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register & 0xFFFFEFFF));
+	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register & 0xFFFFEFFA));
+	return control_register;
+}
 
-	void(*ios_dflush)(void *ptr, unsigned int len) = (void(*)(void *, unsigned int))0x081200F0;
+static void __attribute__((noinline)) restore_mmu(unsigned int control_register)
+{
+	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register));
+}
 
+int _main()
+{
+	int(*disable_interrupts)() = (int(*)())0x0812E778;
+	int(*enable_interrupts)(int) = (int(*)(int))0x0812E78C;
+	void(*invalidate_icache)() = (void(*)())0x0812DCF0;
+	void(*invalidate_dcache)(unsigned int, unsigned int) = (void(*)())0x08120164;
+	void(*flush_dcache)(unsigned int, unsigned int) = (void(*)())0x08120160;
 	char* (*kernel_memcpy)(void*, void*, int) = (char*(*)(void*, void*, int))0x08131D04;
+
+	flush_dcache(0x081200F0, 0x4001); // giving a size >= 0x4000 flushes all cache
+
+	int level = disable_interrupts();
+
+	unsigned int control_register = disable_mmu();
 
 	/* Save the request handle so we can reply later */
 	*(volatile u32*)0x0012F000 = *(volatile u32*)0x1016AD18;
-	ios_dflush((void*)0x0012F000, 0x20);
 
 	/* Patch kernel_error_handler to BX LR immediately */
 	*(int*)0x08129A24 = 0xE12FFF1E;
 
-	void * pset_fault_behavior = (void*)0x081298BC; // this is fucking me up
+	void * pset_fault_behavior = (void*)0x081298BC;
 	kernel_memcpy(pset_fault_behavior, (void*)repairData_set_fault_behavior, sizeof(repairData_set_fault_behavior));
 
 	void * pset_panic_behavior = (void*)0x081296E4;
@@ -86,29 +88,14 @@ int _main()
 	void * pUserBinDest = (void*)0x101312D0;
 	kernel_memcpy(pUserBinDest, (void*)pUserBinSource, sizeof(arm_user_bin));
 
-	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register));
-
-	ios_dflush(pUserBinDest, 0x10000);
-
-	int(*disable_interrupts)() = (int(*)())0x0812E778;
-	int(*enable_interrupts)(int) = (int(*)(int))0x0812E78C;
-	void(*test_and_clean)() = (void(*)())0x0812DCE4;
-	void(*invalidate_icache)() = (void(*)())0x0812DCF0;
-	void(*drain_write_buffer)() = (void(*)())0x0812DCFC;
-
-	int ay = disable_interrupts();
-	/* DISABLE MMU */
-	asm volatile("MRC p15, 0, %0, c1, c0, 0" : "=r" (control_register));
-	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register & 0xFFFFFFFE));
-
 	int i;
 	for (i = 0; i < 32; i++)
 		if (i < 11)
-			((char*)(0x050663B4 - 0x05000000 + 0x081C0000))[i] = "/vol/sdcard"[i];
+			((char*)(0x050663B4 - 0x05000000 + 0x081C0000))[i] = sd_path[i];
 		else
 			((char*)(0x050663B4 - 0x05000000 + 0x081C0000))[i] = (char)0;
 
-	*(int*)(0x050282AE - 0x05000000 + 0x081C0000) = 0xF031FB43; // .thumb bl launch_os_hook
+	*(int*)(0x050282AE - 0x05000000 + 0x081C0000) = 0xF031FB43; // bl launch_os_hook
 
 	*(int*)(0x05052C44 - 0x05000000 + 0x081C0000) = 0xE3A00000; // mov r0, #0
 	*(int*)(0x05052C48 - 0x05000000 + 0x081C0000) = 0xE12FFF1E; // bx lr
@@ -123,19 +110,15 @@ int _main()
 	for (i = 0; i < sizeof(os_launch_hook); i++)
 		((char*)(0x05059938 - 0x05000000 + 0x081C0000))[i] = os_launch_hook[i];
 
-	//*/
+	*(int*)(0x1555500) = 0;
 
 	/* REENABLE MMU */
-	asm volatile("MCR p15, 0, %0, c1, c0, 0" : : "r" (control_register));
+	restore_mmu(control_register);
 
-	test_and_clean();
-	drain_write_buffer();
-	*(int*)(0x1555500) = 0;
+	invalidate_dcache(0x081298BC, 0x4001); // giving a size >= 0x4000 invalidates all cache
 	invalidate_icache();
 
-	enable_interrupts(ay);
-
-
+	enable_interrupts(level);
 
 	return 0;
 }
